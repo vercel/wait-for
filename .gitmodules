@@ -1,0 +1,3 @@
+[submodule "ext/xopt"]
+	path = ext/xopt
+	url = https://github.com/qix-/xopt.git
