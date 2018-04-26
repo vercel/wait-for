@@ -23,6 +23,10 @@ typedef struct cli_args {
 	bool execute;
 	bool read;
 	bool write;
+	bool pipe;
+	bool socket;
+	bool regular;
+	bool directory;
 	char *username;
 } cli_args;
 
@@ -43,7 +47,7 @@ static const xoptOption options[] = {
 		0,
 		XOPT_TYPE_BOOL,
 		0,
-		"Wait for the file to become executable"
+		"Wait for the path to become executable"
 	},
 	{
 		"read",
@@ -52,7 +56,7 @@ static const xoptOption options[] = {
 		0,
 		XOPT_TYPE_BOOL,
 		0,
-		"Wait for the file to become readable"
+		"Wait for the path to become readable"
 	},
 	{
 		"write",
@@ -61,7 +65,43 @@ static const xoptOption options[] = {
 		0,
 		XOPT_TYPE_BOOL,
 		0,
-		"Wait for the file to become writable"
+		"Wait for the path to become writable"
+	},
+	{
+		"pipe",
+		'p',
+		offsetof(cli_args, pipe),
+		0,
+		XOPT_TYPE_BOOL,
+		0,
+		"Wait for the path to be a pipe (FIFO)"
+	},
+	{
+		"socket",
+		's',
+		offsetof(cli_args, socket),
+		0,
+		XOPT_TYPE_BOOL,
+		0,
+		"Wait for the path to be a socket"
+	},
+	{
+		"file",
+		'f',
+		offsetof(cli_args, regular),
+		0,
+		XOPT_TYPE_BOOL,
+		0,
+		"Wait for the path to be a regular file"
+	},
+	{
+		"directory",
+		'd',
+		offsetof(cli_args, directory),
+		0,
+		XOPT_TYPE_BOOL,
+		0,
+		"Wait for the path to be a directory"
 	},
 	{
 		"username",
@@ -86,6 +126,17 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 
 		perror("could not stat awaited file");
 		return -1;
+	}
+
+	bool has_type_preference = args->socket || args->directory || args->regular || args->pipe;
+	if (has_type_preference) {
+		switch (stats.st_mode & S_IFMT) {
+		case S_IFIFO: return args->pipe ? 1 : 0;
+		case S_IFDIR: return args->directory ? 1 : 0;
+		case S_IFREG: return args->regular ? 1 : 0;
+		case S_IFSOCK: return args->socket ? 1 : 0;
+		default: return 0;
+		}
 	}
 
 	bool is_in_group = false;
@@ -154,8 +205,9 @@ int main(int argc, const char **argv) {
 		&err,
 		stderr,
 		"wait-for [--help] [-rwx] <file>",
-		"Waits for a file to exist and optionally have one or modes",
-		"If multiple modes are specified, wait-for waits for all of them to become available",
+		"Wait for a file to exist and optionally have one or modes",
+		"If multiple modes are specified, wait-for waits for all of them to become available.\n"
+		"If multiple file types are specified, wait-for waits for the file to be any one of the specified types.",
 		5);
 
 	if (err != NULL) {
