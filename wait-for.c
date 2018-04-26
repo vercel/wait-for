@@ -3,13 +3,17 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "ext/xopt/xopt.h"
@@ -19,6 +23,7 @@ typedef struct cli_args {
 	bool execute;
 	bool read;
 	bool write;
+	char *username;
 } cli_args;
 
 static const xoptOption options[] = {
@@ -58,27 +63,70 @@ static const xoptOption options[] = {
 		0,
 		"Wait for the file to become writable"
 	},
+	{
+		"username",
+		'U',
+		offsetof(cli_args, username),
+		0,
+		XOPT_TYPE_STRING,
+		0,
+		"The username to run access checks for (NOT the user ID)"
+	},
 	XOPT_NULLOPTION
 };
 
-static int is_satisfactory(const cli_args *restrict args, const char *restrict file) {
-	assert(F_OK == 0);
+static int is_satisfactory(const cli_args *restrict args, const char *username, uid_t uid, gid_t gid, const char *restrict file) {
+	struct stat stats;
 
-	int mode = (args->execute ? X_OK : 0)
-		| (args->read ? R_OK : 0)
-		| (args->write ? W_OK : 0);
-
-	if (access(file, mode) == -1) {
+	if (stat(file, &stats) == -1) {
 		if (errno == ENOENT || errno == EACCES || errno == ENOTDIR || errno == ETXTBSY) {
 			// not an 'error', but simply not satisfactory; keep waiting
 			return 0;
 		}
 
-		perror("could not check access of awaited file");
+		perror("could not stat awaited file");
 		return -1;
 	}
 
-	return 1;
+	bool is_in_group = false;
+	bool is_owner = stats.st_uid == uid;
+
+	gid_t groups[32]; // strong evidence to say that a user can only be part of 32 at a time.
+	int ngroups = sizeof(groups) / sizeof(groups[0]);
+
+	if (getgrouplist(username, gid, &groups[0], &ngroups) == -1) {
+		perror("could not retrieve list of user groups");
+		return -1;
+	}
+
+	for (int i = 0; i < ngroups; i++) {
+		if (groups[i] == stats.st_gid) {
+			is_in_group = true;
+			break;
+		}
+	}
+
+	bool satisfied = true;
+
+	if (satisfied && args->read) {
+		satisfied = (is_owner && (stats.st_mode & S_IRUSR))
+			|| (is_in_group && (stats.st_mode & S_IRGRP))
+			|| (stats.st_mode & S_IROTH);
+	}
+
+	if (satisfied && args->write) {
+		satisfied = (is_owner && (stats.st_mode & S_IWUSR))
+			|| (is_in_group && (stats.st_mode & S_IWGRP))
+			|| (stats.st_mode & S_IWOTH);
+	}
+
+	if (satisfied && args->execute) {
+		satisfied = (is_owner && (stats.st_mode & S_IXUSR))
+			|| (is_in_group && (stats.st_mode & S_IXGRP))
+			|| (stats.st_mode & S_IXOTH);
+	}
+
+	return satisfied;
 }
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
@@ -88,6 +136,9 @@ int main(int argc, const char **argv) {
 	int inotify_fd = -1;
 	int watch_fd = -1;
 	char dirpath[PATH_MAX];
+	char username[LOGIN_NAME_MAX];
+	uid_t uid = 0;
+	gid_t gid = 0;
 
 	cli_args args;
 	memset(&args, 0, sizeof(args));
@@ -115,6 +166,24 @@ int main(int argc, const char **argv) {
 
 	if (extrac != 1) {
 		fprintf(stderr, "error: expected exactly one positional argument (the file to wait for) - got %d\n", extrac);
+		status = 2;
+		goto exit;
+	}
+
+	if (args.username == NULL) {
+		// attempt to populate based on current UID
+		struct passwd *pwd = getpwuid(getuid());
+		if (pwd == NULL) {
+			perror("could not get passwd entry for the user");
+			status = 1;
+			goto exit;
+		}
+
+		strncpy(username, pwd->pw_name, sizeof(username));
+		uid = pwd->pw_uid;
+		gid = pwd->pw_gid;
+	} else if (strnlen(args.username, 1) == 0) {
+		fputs("error: username cannot be zero-length\n", stderr);
 		status = 2;
 		goto exit;
 	}
@@ -151,7 +220,7 @@ int main(int argc, const char **argv) {
 		// we simply want to check the stat of the file.
 		// we also do this first so that the initial check
 		// is performed regardless of inotify stuff.
-		switch (is_satisfactory(&args, extrav[0])) {
+		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
 		case 1:
 			status = 0;
 			goto exit;
@@ -193,7 +262,7 @@ fallback:
 	}
 
 	for (;;) {
-		switch (is_satisfactory(&args, extrav[0])) {
+		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
 		case 1:
 			status = 0;
 			goto exit;
