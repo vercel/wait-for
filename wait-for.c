@@ -121,6 +121,7 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 	if (stat(file, &stats) == -1) {
 		if (errno == ENOENT || errno == EACCES || errno == ENOTDIR || errno == ETXTBSY) {
 			// not an 'error', but simply not satisfactory; keep waiting
+			fprintf(stderr, "wait-for %s: is_satisfactory errno=%d\n", file, errno);
 			return 0;
 		}
 
@@ -129,7 +130,9 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 	}
 
 	bool has_type_preference = args->socket || args->directory || args->regular || args->pipe;
+	fprintf(stderr, "wait-for %s: has_type_preference=%d\n", file, has_type_preference);
 	if (has_type_preference) {
+		fprintf(stderr, "wait-for %s: is_satisfactory mode=%d\n", file, stats.st_mode & S_IFMT);
 		switch (stats.st_mode & S_IFMT) {
 		case S_IFIFO: return args->pipe ? 1 : 0;
 		case S_IFDIR: return args->directory ? 1 : 0;
@@ -177,6 +180,7 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 			|| (stats.st_mode & S_IXOTH);
 	}
 
+	fprintf(stderr, "wait-for %s: is_satisfactory satisfied=%d\n", file, satisfied);
 	return satisfied;
 }
 
@@ -257,6 +261,7 @@ int main(int argc, const char **argv) {
 	}
 
 	watch_fd = inotify_add_watch(inotify_fd, dirpath, IN_CREATE | IN_ATTRIB | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO);
+	fprintf(stderr, "wait-for %s: inotify_add_watch=%d\n", extrav[0], watch_fd);
 	if (watch_fd == -1) {
 		if (errno != ENOENT) {
 			// nothing we can really do
@@ -272,7 +277,9 @@ int main(int argc, const char **argv) {
 		// we simply want to check the stat of the file.
 		// we also do this first so that the initial check
 		// is performed regardless of inotify stuff.
-		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
+		int i = is_satisfactory(&args, username, uid, gid, extrav[0]);
+		fprintf(stderr, "wait-for %s: is_satisfactory=%d\n", extrav[0], i);
+		switch (i) {
 		case 1:
 			status = 0;
 			goto exit;
@@ -285,6 +292,7 @@ int main(int argc, const char **argv) {
 		}
 
 		int numread = read(inotify_fd, in_buf, BUF_LEN);
+		fprintf(stderr, "wait-for %s: read=%d\n", extrav[0], numread);
 		if (numread == 0) {
 			fputs("error: inotify hung up (EOF) (\?\?\? this shouldn't happen)\n", stderr);
 			status = 1;
@@ -301,6 +309,7 @@ int main(int argc, const char **argv) {
 	assert(false && "aborting before hitting the second loop - the code is missing a goto");
 
 fallback:
+	fprintf(stderr, "wait-for %s: fallback\n", extrav[0]);
 	// at this point, inotify couldn't be initialized.
 	// shut it down, shut it all down -- then do a manual loop.
 	if (watch_fd != -1) {
@@ -314,7 +323,9 @@ fallback:
 	}
 
 	for (;;) {
-		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
+		int i = is_satisfactory(&args, username, uid, gid, extrav[0]);
+		fprintf(stderr, "wait-for %s: fallback is_satisfactory=%d\n", extrav[0], i);
+		switch (i) {
 		case 1:
 			status = 0;
 			goto exit;
@@ -343,6 +354,7 @@ exit:
 		close(inotify_fd);
 	}
 
+	fprintf(stderr, "wait-for %s: exit status=%d\n", extrav[0], status);
 	return status;
 xopt_help:
 	status = 2;
