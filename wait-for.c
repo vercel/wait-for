@@ -221,7 +221,7 @@ int main(int argc, const char **argv) {
 		&extrac, &extrav,
 		&err,
 		stderr,
-		"wait-for [--help] [-rwx] <file>",
+		"wait-for [--help] [-rwx] [-dfps] [-U <username>] <file>",
 		"Wait for a file to exist and optionally have one or modes",
 		"If multiple modes are specified, wait-for waits for all of them to become available.\n"
 		"If multiple file types are specified, wait-for waits for the file to be any one of the specified types.",
