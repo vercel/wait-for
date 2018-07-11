@@ -147,10 +147,19 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 	bool is_in_group = false;
 	bool is_owner = stats.st_uid == uid;
 
-	gid_t groups[32]; // strong evidence to say that a user can only be part of 32 at a time.
-	int ngroups = sizeof(groups) / sizeof(groups[0]);
+	int ngroups = 0;
+	if (getgrouplist(username, gid, NULL, &ngroups) != -1 || ngroups <= 0) {
+		perror("could not count number of user groups");
+		return -1;
+	}
 
-	if (getgrouplist(username, gid, &groups[0], &ngroups) == -1) {
+	gid_t *groups = malloc(ngroups * sizeof(gid_t));
+	if (!groups) {
+		perror("no memory left for list of user groups");
+		return -1;
+	}
+
+	if (getgrouplist(username, gid, groups, &ngroups) == -1) {
 		perror("could not retrieve list of user groups");
 		return -1;
 	}
@@ -161,6 +170,9 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 			break;
 		}
 	}
+
+	free(groups);
+	groups = NULL;
 
 	bool satisfied = true;
 
