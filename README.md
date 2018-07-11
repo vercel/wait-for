@@ -7,12 +7,14 @@ A small utility that waits for a file to exist, optionally with some permissions
 Either via Docker:
 
 ```console
+$ git submodule update
 $ docker build -t zeit/wait-for .
 ```
 
 or using CMake (requires Linux)
 
 ```console
+$ git submodule update
 $ mkdir build && cd build
 $ cmake .. -DCMAKE_BUILD_TYPE=Release
 $ cmake --build .
