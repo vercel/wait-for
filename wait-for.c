@@ -130,22 +130,36 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 
 	bool has_type_preference = args->socket || args->directory || args->regular || args->pipe;
 	if (has_type_preference) {
+		bool type_satisfied;
 		switch (stats.st_mode & S_IFMT) {
-		case S_IFIFO: return args->pipe ? 1 : 0;
-		case S_IFDIR: return args->directory ? 1 : 0;
-		case S_IFREG: return args->regular ? 1 : 0;
-		case S_IFSOCK: return args->socket ? 1 : 0;
-		default: return 0;
+			case S_IFIFO: type_satisfied = args->pipe; break;
+			case S_IFDIR: type_satisfied = args->directory; break;
+			case S_IFREG: type_satisfied = args->regular; break;
+			case S_IFSOCK: type_satisfied = args->socket; break;
+			default: type_satisfied = false;
+		}
+
+		if (!type_satisfied) {
+			return 0;
 		}
 	}
 
 	bool is_in_group = false;
 	bool is_owner = stats.st_uid == uid;
 
-	gid_t groups[32]; // strong evidence to say that a user can only be part of 32 at a time.
-	int ngroups = sizeof(groups) / sizeof(groups[0]);
+	int ngroups = 0;
+	if (getgrouplist(username, gid, NULL, &ngroups) != -1 || ngroups <= 0) {
+		perror("could not count number of user groups");
+		return -1;
+	}
 
-	if (getgrouplist(username, gid, &groups[0], &ngroups) == -1) {
+	gid_t *groups = malloc(ngroups * sizeof(gid_t));
+	if (!groups) {
+		perror("no memory left for list of user groups");
+		return -1;
+	}
+
+	if (getgrouplist(username, gid, groups, &ngroups) == -1) {
 		perror("could not retrieve list of user groups");
 		return -1;
 	}
@@ -156,6 +170,9 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 			break;
 		}
 	}
+
+	free(groups);
+	groups = NULL;
 
 	bool satisfied = true;
 
@@ -204,7 +221,7 @@ int main(int argc, const char **argv) {
 		&extrac, &extrav,
 		&err,
 		stderr,
-		"wait-for [--help] [-rwx] <file>",
+		"wait-for [--help] [-rwx] [-dfps] [-U <username>] <file>",
 		"Wait for a file to exist and optionally have one or modes",
 		"If multiple modes are specified, wait-for waits for all of them to become available.\n"
 		"If multiple file types are specified, wait-for waits for the file to be any one of the specified types.",
@@ -216,8 +233,14 @@ int main(int argc, const char **argv) {
 		goto exit;
 	}
 
-	if (extrac != 1) {
-		fprintf(stderr, "error: expected exactly one positional argument (the file to wait for) - got %d\n", extrac);
+	if (extrac < 1) {
+		fprintf(stderr, "error: missing file argument (the file to wait for).\n");
+		status = 2;
+		goto exit;
+	}
+
+	if (extrac > 1) {
+		fprintf(stderr, "error: too many arguments.\n");
 		status = 2;
 		goto exit;
 	}
