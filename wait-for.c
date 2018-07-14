@@ -203,7 +203,7 @@ int main(int argc, const char **argv) {
 	int status = 0;
 	int inotify_fd = -1;
 	int watch_fd = -1;
-	char dirpath[PATH_MAX];
+	char *dirpath_buffer = NULL;
 	struct passwd *pwd = NULL;
 
 	cli_args args;
@@ -273,15 +273,20 @@ int main(int argc, const char **argv) {
 		goto exit;
 	}
 
+	dirpath_buffer = strdup(extrav[0]);
+	if (dirpath_buffer == NULL) {
+		fputs("error: out of memory\n", stderr);
+		status = 1;
+		goto exit;
+	}
+
+	const char *dirpath = dirname(dirpath_buffer);
+
+	assert(dirpath != NULL);
+
 	// we try to initialize the watch for the directory
 	// if that fails, we fall back to a standard polling mechanism
 	// which isn't as efficient
-	strcpy(dirpath, extrav[0]);
-	if (dirname(dirpath) == NULL) {
-		fprintf(stderr, "warning: could not get dirname of the given path (falling back to poll mechanism): %s\n", strerror(errno));
-		goto fallback;
-	}
-
 	watch_fd = inotify_add_watch(inotify_fd, dirpath, IN_CREATE | IN_ATTRIB | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO);
 	if (watch_fd == -1) {
 		if (errno != ENOENT) {
@@ -357,6 +362,10 @@ fallback:
 	}
 
 exit:
+	if (dirpath_buffer != NULL) {
+		free(dirpath_buffer);
+	}
+
 	if (extrav != NULL) {
 		free(extrav);
 	}
