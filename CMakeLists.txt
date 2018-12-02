@@ -1,6 +1,12 @@
 project (wait-for)
 cmake_minimum_required (VERSION 3.2)
 
+include (CheckSymbolExists)
+check_symbol_exists (strdup string.h HAVE_STRDUP)
+
+configure_file ("${PROJECT_SOURCE_DIR}/config.h.in"	"${PROJECT_BINARY_DIR}/config.h")
+include_directories ("${PROJECT_BINARY_DIR}")
+
 add_subdirectory (ext/xopt)
 
 if (APPLE OR UNIX)
@@ -10,5 +16,5 @@ if (APPLE OR UNIX)
 	set (CMAKE_EXE_LINKER_FLAGS_RELEASE "-static-libgcc -static")
 endif ()
 
-add_executable (wait-for wait-for.c)
+add_executable (wait-for wait-for.c strdup.c)
 target_link_libraries (wait-for xopt)

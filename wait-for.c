@@ -115,7 +115,7 @@ static const xoptOption options[] = {
 	XOPT_NULLOPTION
 };
 
-static int is_satisfactory(const cli_args *restrict args, const char *username, uid_t uid, gid_t gid, const char *restrict file) {
+static int is_satisfactory(const cli_args *restrict args, const struct passwd *pwd, const char *restrict file) {
 	struct stat stats;
 
 	if (stat(file, &stats) == -1) {
@@ -144,11 +144,10 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 		}
 	}
 
-	bool is_in_group = false;
-	bool is_owner = stats.st_uid == uid;
+	bool is_owner = stats.st_uid == pwd->pw_uid;
 
 	int ngroups = 0;
-	if (getgrouplist(username, gid, NULL, &ngroups) != -1 || ngroups <= 0) {
+	if (getgrouplist(pwd->pw_name, pwd->pw_gid, NULL, &ngroups) != -1 || ngroups <= 0) {
 		perror("could not count number of user groups");
 		return -1;
 	}
@@ -159,11 +158,12 @@ static int is_satisfactory(const cli_args *restrict args, const char *username, 
 		return -1;
 	}
 
-	if (getgrouplist(username, gid, groups, &ngroups) == -1) {
+	if (getgrouplist(pwd->pw_name, pwd->pw_gid, groups, &ngroups) == -1) {
 		perror("could not retrieve list of user groups");
 		return -1;
 	}
 
+	bool is_in_group = false;
 	for (int i = 0; i < ngroups; i++) {
 		if (groups[i] == stats.st_gid) {
 			is_in_group = true;
@@ -203,10 +203,8 @@ int main(int argc, const char **argv) {
 	int status = 0;
 	int inotify_fd = -1;
 	int watch_fd = -1;
-	char dirpath[PATH_MAX];
-	char username[LOGIN_NAME_MAX];
-	uid_t uid = 0;
-	gid_t gid = 0;
+	char *dirpath_buffer = NULL;
+	struct passwd *pwd = NULL;
 
 	cli_args args;
 	memset(&args, 0, sizeof(args));
@@ -246,21 +244,26 @@ int main(int argc, const char **argv) {
 	}
 
 	if (args.username == NULL) {
-		// attempt to populate based on current UID
-		struct passwd *pwd = getpwuid(getuid());
+		pwd = getpwuid(getuid());
 		if (pwd == NULL) {
 			perror("could not get passwd entry for the user");
 			status = 1;
 			goto exit;
 		}
-
-		strncpy(username, pwd->pw_name, sizeof(username));
-		uid = pwd->pw_uid;
-		gid = pwd->pw_gid;
-	} else if (strnlen(args.username, 1) == 0) {
-		fputs("error: username cannot be zero-length\n", stderr);
-		status = 2;
-		goto exit;
+	} else {
+		errno = 0;
+		pwd = getpwnam(args.username);
+		if (pwd == NULL) {
+			if (errno == 0) {
+				fprintf(stderr, "error: user '%s' not found\n", args.username);
+				status = 2;
+				goto exit;
+			} else {
+				fprintf(stderr, "error: could not get passwd entry for user '%s': %s\n", args.username, strerror(errno));
+				status = 1;
+				goto exit;
+			}
+		}
 	}
 
 	inotify_fd = inotify_init();
@@ -270,15 +273,20 @@ int main(int argc, const char **argv) {
 		goto exit;
 	}
 
+	dirpath_buffer = strdup(extrav[0]);
+	if (dirpath_buffer == NULL) {
+		fputs("error: out of memory\n", stderr);
+		status = 1;
+		goto exit;
+	}
+
+	const char *dirpath = dirname(dirpath_buffer);
+
+	assert(dirpath != NULL);
+
 	// we try to initialize the watch for the directory
 	// if that fails, we fall back to a standard polling mechanism
 	// which isn't as efficient
-	strcpy(dirpath, extrav[0]);
-	if (dirname(dirpath) == NULL) {
-		fprintf(stderr, "warning: could not get dirname of the given path (falling back to poll mechanism): %s\n", strerror(errno));
-		goto fallback;
-	}
-
 	watch_fd = inotify_add_watch(inotify_fd, dirpath, IN_CREATE | IN_ATTRIB | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO);
 	if (watch_fd == -1) {
 		if (errno != ENOENT) {
@@ -295,7 +303,7 @@ int main(int argc, const char **argv) {
 		// we simply want to check the stat of the file.
 		// we also do this first so that the initial check
 		// is performed regardless of inotify stuff.
-		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
+		switch (is_satisfactory(&args, pwd, extrav[0])) {
 		case 1:
 			status = 0;
 			goto exit;
@@ -337,7 +345,7 @@ fallback:
 	}
 
 	for (;;) {
-		switch (is_satisfactory(&args, username, uid, gid, extrav[0])) {
+		switch (is_satisfactory(&args, pwd, extrav[0])) {
 		case 1:
 			status = 0;
 			goto exit;
@@ -354,6 +362,10 @@ fallback:
 	}
 
 exit:
+	if (dirpath_buffer != NULL) {
+		free(dirpath_buffer);
+	}
+
 	if (extrav != NULL) {
 		free(extrav);
 	}
